@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PTO days to use before carryover</title>
+<style>
+  html { background: #fff; color: #000; }
+  body {
+    max-width: 40rem;
+    margin: 0 auto;
+    padding: 2rem 1rem 4rem;
+    font-family: Georgia, "Times New Roman", Times, serif;
+    font-size: 1.125rem;
+    line-height: 1.5;
+  }
+  h1 { font-size: 1.9rem; line-height: 1.15; margin: 0 0 0.5rem; }
+  h2 { font-size: 1.3rem; margin: 0 0 0.75rem; }
+  p { margin: 0 0 1rem; }
+
+  form { margin: 1.5rem 0 2rem; }
+  .field { margin-bottom: 1.25rem; }
+  label { display: block; font-weight: bold; }
+  .hint { display: block; font-size: 0.95rem; }
+  input {
+    display: block;
+    width: 100%;
+    max-width: 18rem;
+    margin-top: 0.25rem;
+    padding: 0.4rem 0.5rem;
+    font: inherit;
+    color: #000;
+    background: #fff;
+    border: 2px solid #000;
+    border-radius: 0;
+  }
+  input:focus-visible, summary:focus-visible { outline: 3px solid #000; outline-offset: 3px; }
+  details { border-top: 1px solid #000; padding-top: 0.75rem; }
+  summary { cursor: pointer; font-weight: bold; margin-bottom: 1rem; }
+
+  #result { border-top: 4px solid #000; padding-top: 1.25rem; }
+  .answer { font-size: 1.6rem; line-height: 1.25; }
+  .error { font-weight: bold; }
+
+  .tiles { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 0.5rem; }
+  .tile { display: flex; width: 24px; height: 24px; border: 1px solid #000; background: #fff; }
+  .tile .k { background: #000; }
+  .tile .l { background: repeating-linear-gradient(45deg, #000 0 2px, #fff 2px 5px); }
+  .legend { margin: 0 0 1.5rem; font-size: 0.95rem; }
+  .legend span { display: inline-block; margin-right: 1.25rem; }
+  .swatch { display: inline-block; width: 14px; height: 14px; border: 1px solid #000; margin-right: 0.4rem; vertical-align: -2px; }
+  .swatch.k { background: #000; }
+  .swatch.l { background: repeating-linear-gradient(45deg, #000 0 2px, #fff 2px 5px); }
+
+  table { width: 100%; border-collapse: collapse; margin: 0 0 1rem; font-size: 1rem; }
+  th, td { text-align: left; padding: 0.4rem 0.5rem 0.4rem 0; border-top: 1px solid #000; vertical-align: top; }
+  td { text-align: right; padding-right: 0; }
+  tr:last-child th, tr:last-child td { border-bottom: 1px solid #000; }
+  tr.key th, tr.key td { font-weight: bold; border-top: 2px solid #000; }
+  .note { font-size: 0.95rem; }
+  footer { margin-top: 2.5rem; font-size: 0.95rem; }
+</style>
+</head>
+<body>
+<h1>How many days of PTO do I have to use?</h1>
+
+
+<form id="form" onsubmit="return false;">
+  <div class="field">
+    <label for="current">PTO hours you have now</label>
+    <input id="current" type="number" inputmode="decimal" min="0" step="any">
+  </div>
+  <div class="field">
+    <label for="rate">PTO hours you earn every 2 weeks</label>
+    <input id="rate" type="number" inputmode="decimal" min="0" step="any">
+  </div>
+  <div class="field">
+    <label for="extra">Extra PTO hours coming (optional)</label>
+    <span class="hint">Bonus or one-time hours you expect before the carryover date. Leave blank if none.</span>
+    <input id="extra" type="number" inputmode="decimal" min="0" step="any">
+  </div>
+
+  <details>
+    <summary>Dates and workday length (optional)</summary>
+    <div class="field">
+      <label for="nextPay">Next payday</label>
+      <span class="hint">Used to count your remaining paychecks. If blank, the count is estimated.</span>
+      <input id="nextPay" type="date">
+    </div>
+    <div class="field">
+      <label for="yearEnd">Carryover date</label>
+      <span class="hint">The day your balance is cut down to 80 hours. Starts as December 31.</span>
+      <input id="yearEnd" type="date">
+    </div>
+    <div class="field">
+      <label for="hpd">Hours in one workday</label>
+      <span class="hint">Used to convert hours to days. Starts as 8.</span>
+      <input id="hpd" type="number" inputmode="decimal" min="0.25" max="24" step="any" value="8">
+    </div>
+  </details>
+</form>
+
+<section id="result" aria-live="polite"></section>
+
+
+<script>
+(function () {
+  "use strict";
+
+  var CAP = 80;
+  var PERIOD_DAYS = 14;
+  var MAX_TILES = 60;
+
+  var curEl = document.getElementById("current");
+  var rateEl = document.getElementById("rate");
+  var extraEl = document.getElementById("extra");
+  var nextEl = document.getElementById("nextPay");
+  var endEl = document.getElementById("yearEnd");
+  var hpdEl = document.getElementById("hpd");
+  var out = document.getElementById("result");
+
+  function startOfToday() {
+    var n = new Date();
+    return new Date(n.getFullYear(), n.getMonth(), n.getDate());
+  }
+  function pad(n) { return (n < 10 ? "0" : "") + n; }
+  function toISO(d) { return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()); }
+  function parseDate(s) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s || "")) return null;
+    var p = s.split("-");
+    return new Date(+p[0], +p[1] - 1, +p[2]);
+  }
+  function round2(n) { return Math.round((n + Number.EPSILON) * 100) / 100; }
+  function fmt(n) { return round2(n).toLocaleString(undefined, { maximumFractionDigits: 2 }); }
+  function fmtDate(d) {
+    return d.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+  }
+  function plural(n, w) { return fmt(n) + " " + w + (round2(n) === 1 ? "" : "s"); }
+
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+  function show(node) {
+    out.textContent = "";
+    out.appendChild(node);
+  }
+  function message(cls, text) {
+    var frag = document.createDocumentFragment();
+    frag.appendChild(el("h2", null, "Result"));
+    frag.appendChild(el("p", cls, text));
+    show(frag);
+  }
+
+  endEl.value = toISO(new Date(new Date().getFullYear(), 11, 31));
+
+  function calculate() {
+    var cur = parseFloat(curEl.value);
+    var rate = parseFloat(rateEl.value);
+
+    if (curEl.value === "" || rateEl.value === "") {
+      message(null, "Enter the PTO hours you have now and the hours you earn every 2 weeks.");
+      return;
+    }
+    if (isNaN(cur) || isNaN(rate) || cur < 0 || rate < 0) {
+      message("error", "Error: hours must be numbers of 0 or more.");
+      return;
+    }
+
+    var extra = extraEl.value === "" ? 0 : parseFloat(extraEl.value);
+    if (isNaN(extra) || extra < 0) {
+      message("error", "Error: extra PTO hours must be 0 or more, or left blank.");
+      return;
+    }
+
+    var hpd = hpdEl.value === "" ? 8 : parseFloat(hpdEl.value);
+    if (isNaN(hpd) || hpd <= 0 || hpd > 24) {
+      message("error", "Error: hours in one workday must be more than 0 and no more than 24.");
+      return;
+    }
+
+    var end = parseDate(endEl.value);
+    if (!end) {
+      message("error", "Error: choose a carryover date.");
+      return;
+    }
+    var today = startOfToday();
+    if (end < today) {
+      message("error", "Error: the carryover date has already passed. Choose today or a later date.");
+      return;
+    }
+
+    var count, note;
+    var next = parseDate(nextEl.value);
+    if (next) {
+      var d = new Date(next.getTime());
+      var rolled = false;
+      while (d < today) { d.setDate(d.getDate() + PERIOD_DAYS); rolled = true; }
+      count = 0;
+      for (var x = new Date(d.getTime()); x <= end; x.setDate(x.getDate() + PERIOD_DAYS)) count++;
+      note = "Paychecks counted: every second payday from " + fmtDate(d) + " through " + fmtDate(end) + "." +
+        (rolled ? " The payday you entered was in the past, so it was moved forward 2 weeks at a time." : "") +
+        " A payday that falls today is counted. If today's hours already posted, enter your next payday instead.";
+    } else {
+      var days = Math.round((end.getTime() - today.getTime()) / 86400000);
+      count = Math.floor(days / PERIOD_DAYS);
+      note = "Paychecks are estimated from the " + days + " calendar days left. Enter your next payday for an exact count.";
+    }
+
+    var earned = rate * count;
+    var projected = cur + earned + extra;
+    var burn = Math.max(0, round2(projected - CAP));
+    var carried = Math.min(round2(projected), CAP);
+
+    function dh(h) { return plural(h / hpd, "day") + " (" + fmt(h) + " hours)"; }
+
+    var frag = document.createDocumentFragment();
+    frag.appendChild(el("h2", null, "Result"));
+
+    var ans = el("p", "answer");
+    if (burn > 0) {
+      ans.appendChild(document.createTextNode("Use at least "));
+      ans.appendChild(el("strong", null, plural(burn / hpd, "day")));
+      ans.appendChild(document.createTextNode(" (" + fmt(burn) + " hours) of PTO on or before " + fmtDate(end) + "."));
+      frag.appendChild(ans);
+      if (round2(burn / hpd) !== Math.round(burn / hpd)) {
+        frag.appendChild(el("p", null, "If you can only book whole days, book " + Math.ceil(round2(burn / hpd)) + "."));
+      }
+    } else {
+      ans.appendChild(document.createTextNode("You do not need to use any PTO. "));
+      ans.appendChild(document.createTextNode("You are on track to carry over all " + dh(projected) + "."));
+      frag.appendChild(ans);
+    }
+    frag.appendChild(el("p", null, "You keep earning PTO while you are off. Every paycheck up to the carryover date is already included below."));
+
+    var totalDays = Math.ceil(round2(projected / hpd));
+    if (totalDays > 0) {
+      var grid = el("div", "tiles");
+      grid.setAttribute("role", "img");
+      grid.setAttribute("aria-label", plural(carried / hpd, "day") + " carry over and " + plural(burn / hpd, "day") + " would be removed");
+      var shown = Math.min(totalDays, MAX_TILES);
+      for (var i = 0; i < shown; i++) {
+        var s = i * hpd;
+        var filledEnd = Math.min((i + 1) * hpd, projected);
+        var keepH = Math.max(0, Math.min(filledEnd, CAP) - s);
+        var lostH = Math.max(0, filledEnd - Math.max(s, CAP));
+        var tile = el("div", "tile");
+        var k = el("div", "k"); k.style.width = (keepH / hpd * 100) + "%";
+        var l = el("div", "l"); l.style.width = (lostH / hpd * 100) + "%";
+        tile.appendChild(k); tile.appendChild(l);
+        grid.appendChild(tile);
+      }
+      frag.appendChild(grid);
+
+      var legend = el("p", "legend");
+      var a = el("span");
+      a.appendChild(el("span", "swatch k"));
+      a.appendChild(document.createTextNode("Carries over: " + plural(carried / hpd, "day")));
+      var b = el("span");
+      b.appendChild(el("span", "swatch l"));
+      b.appendChild(document.createTextNode("Removed if unused: " + plural(burn / hpd, "day")));
+      legend.appendChild(a);
+      legend.appendChild(b);
+      frag.appendChild(legend);
+      if (totalDays > MAX_TILES) {
+        frag.appendChild(el("p", "note", "Each square is one workday. Only the first " + MAX_TILES + " are drawn; " + (totalDays - MAX_TILES) + " more are not shown."));
+      } else {
+        frag.appendChild(el("p", "note", "Each square is one workday."));
+      }
+    }
+
+    var table = el("table");
+    function row(label, value, cls) {
+      var tr = el("tr", cls || null);
+      tr.appendChild(el("th", null, label));
+      tr.appendChild(el("td", null, value));
+      table.appendChild(tr);
+    }
+    row("PTO now", dh(cur));
+    row("Still to earn: " + plural(count, "paycheck") + " at " + fmt(rate) + " hours", "+ " + dh(earned));
+    if (extra > 0) row("Extra hours coming", "+ " + dh(extra));
+    row("Balance on " + fmtDate(end), dh(projected));
+    row("Carryover limit", dh(CAP));
+    row("PTO to use before then", dh(burn), "key");
+    row("Carried into next year", dh(carried));
+    frag.appendChild(table);
+
+    frag.appendChild(el("p", "note", note + " One workday is " + fmt(hpd) + " hours."));
+
+    show(frag);
+  }
+
+  [curEl, rateEl, extraEl, nextEl, endEl, hpdEl].forEach(function (e) {
+    e.addEventListener("input", calculate);
+    e.addEventListener("change", calculate);
+  });
+  calculate();
+})();
+</script>
+</body>
+</html>
